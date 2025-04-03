@@ -1,27 +1,115 @@
 # .circleci/config.yml
 version: 2.1
 orbs:
-  macos: circleci/macos@2.5.2
+  macos: circleci/macos@2
+  maven: circleci/maven@1.4.0
 
 jobs:
   iOS:
     macos:
       xcode: 14.1.0
+    environment:
+      atd_serverConfig_server_plugin_device-farm_derivedDataPath_simulator: /Users/distiller/project/apps/WebDriverAgent-Test
     steps:
       - checkout
+      - run: |
+          xcrun simctl create TestiPhoneX com.apple.CoreSimulator.SimDeviceType.iPhone-X com.apple.CoreSimulator.SimRuntime.iOS-16-1 > deviceid.txt
+      - run:
+          name: Starting simulator in background
+          command: DEVICEUUID=`cat deviceid.txt` && echo $DEVICEUUID && xcrun simctl boot $DEVICEUUID
+          background: true
       - run:
           name: Node Version
           command: |
-            nvm install v16.18.1 && nvm alias default 16.18.1
+            nvm install v19.0.0 && nvm alias default 19.0.0
       - run:
-          name: Run iOS Test
+          name: Install Appium and Run iOS Test
           command: |
-            nvm install v16.18.1 && nvm alias default 16.18.1
+            nvm install v19.0.0 && nvm alias default 19.0.0
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install --cask homebrew/cask-versions/adoptopenjdk8
+            export PATH=$JAVA_HOME/bin:$PATH 
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install maven
             node -v 
-            npm ci
-            npm run integration-ios
+            npm install
+            ./node_modules/.bin/appium -v
+            ./node_modules/.bin/appium plugin list
+            ./node_modules/.bin/appium driver list
+            Platform='iOS' CONFIG_FILE='./configs/iOSConfig.properties' mvn clean -Dtest=Runner test -Dcheckstyle.skip
 
+  Android:
+    machine:
+      image: android:202102-01
+    # To optimize build times, we recommend "large" and above for Android-related jobs
+    resource_class: large
+    steps:
+      - checkout
+      - run:
+          name: Create avd
+          command: |
+            SYSTEM_IMAGES="system-images;android-29;default;x86"
+            sdkmanager "$SYSTEM_IMAGES"
+            echo "no" | avdmanager --verbose create avd -n test -k "$SYSTEM_IMAGES"
+      - run:
+          name: Launch emulator 1
+          command: |
+            emulator -avd test -delay-adb -verbose -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          background: true
+
+      - run:
+          name: wait for emulator
+          command: adb wait-for-device shell 'while [[ -z $(getprop dev.bootcomplete) ]]; do sleep 1; done;'
+      - run:
+          name: Install Appium and Run Android Test
+          command: |
+            nvm install v19.0.0 && nvm alias default 19.0.0 
+            node -v 
+            npm install
+            ./node_modules/.bin/appium -v
+            ./node_modules/.bin/appium plugin list
+            ./node_modules/.bin/appium driver list
+            Platform='android' CONFIG_FILE='./configs/config.properties' mvn clean -Dtest=Runner test -Dcheckstyle.skip
+
+  BrowserStack:
+      machine:
+       image: android:202102-01
+    # To optimize build times, we recommend "large" and above for Android-related jobs
+      resource_class: large
+      steps:
+       - checkout
+       - run:
+          name: Install Appium and Run Android Test
+          command: |
+            nvm install v19.0.0 && nvm alias default 19.0.0 
+            node -v 
+            npm install
+            ./node_modules/.bin/appium -v
+            ./node_modules/.bin/appium plugin list
+            ./node_modules/.bin/appium driver list
+            Platform='android' CLOUD_USERNAME=$user_bs CLOUD_KEY=$pass_bs CONFIG_FILE='./configs/bs_config.properties' mvn clean -Dtest=Runner test -Dcheckstyle.skip
+
+  LambdaTest:
+    machine:
+      image: android:202102-01
+    # To optimize build times, we recommend "large" and above for Android-related jobs
+    resource_class: large
+    steps:
+      - checkout
+      - run:
+          name: Install Appium and Run Android Test
+          command: |
+            nvm install v19.0.0 && nvm alias default 19.0.0 
+            node -v 
+            npm install
+            ./node_modules/.bin/appium -v
+            ./node_modules/.bin/appium plugin list
+            ./node_modules/.bin/appium driver list
+            Platform='android' CLOUD_USERNAME=$user_lt CLOUD_KEY=$pass_lt CONFIG_FILE='./configs/lambdaTest_config.properties' mvn clean -Dtest=Runner test -Dcheckstyle.skip
 workflows:
   build:
     jobs:
       - iOS
+      - LambdaTest
+      - BrowserStack
+      - Android
+      - maven/test:
+            command: 'compile'
